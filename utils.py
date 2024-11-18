@@ -19,7 +19,7 @@ def window(img, ww, wl, rescale_intercept=0):
     img = (img - (wl-ww/2))/ww
     return img
 
-class SparseDataset(torch.utils.data.Dataset):
+class SparseDataset2D(torch.utils.data.Dataset):
 
     """
     Dataset for the sparse-view artifact removal task.     
@@ -194,5 +194,83 @@ class SparseDataset(torch.utils.data.Dataset):
         if self.augmentation == True:
             image_sparse, image_gt = self._augmentation(image_sparse, image_gt)
         return image_sparse, image_gt, label.squeeze()
+
+
+class SparseDataset3D(torch.utils.data.Dataset):
+
+    """
+    Dataset for the sparse-view artifact removal task.     
+        
+    Parameters
+    ----------
+    df : pandas dataframe
+        list with the traing/val/test data
+    path_sparse : string
+        path of the directory where the sparse-view data is located
+    path_gt : string
+        path of the directory where the full-view data is located
+    augmentation : bool
+        If data augmentation shall be applied or not.
+    image_size : touple
+        size, to which the images are cut if specified, default: original size of image
+    ww, wl : int
+        window width and level to which the input images are clipped
+    rescale_intercept : int
+        to get to HU values
+
+    Returns
+    -------
+    img : ndarray
+    labels : list
+    """
+        
+    def __init__(self, 
+                 df = None, 
+                 path = None, 
+                 augmentation = False, 
+                 ww=None, 
+                 wl=None,
+                 rescale_intercept=0,
+                 downsample=True,
+                 size=(100, 256, 256)):
+
+        self.df = df
+        self.filename_list = df["filename"].values
+        self.path = path
+        self.augmentation = augmentation
+        self.ww = ww
+        self.wl = wl
+        self.rescale_intercept=rescale_intercept
+        self.downsample = downsample
+        self.size = size
+
+    def __len__(self):
+        return int(len(self.filename_list))
+
+    def __getitem__(self, idx):
+        filename = self.filename_list[idx % len(self.filename_list)]
+        
+        fullview, inpt, x1, x2, x3, x4, x5 = self.load(filename)
+        return fullview, inpt, x1, x2, x3, x4, x5
+
+    def load(self, filename):
+        nr_slices = int(self.df.loc[self.df['filename'] == filename]["nr_slices"].values)
+        #randomly chosse one quarter in x-y direction and 100 slices in z direction
+        if self.downsample==True:
+            rand1, rand2, rand3 = random.choice(range(0, nr_slices-self.size[0])), random.choice([0, 1]), random.choice([0, 1])
+        else:
+            rand1, rand2, rand3 = random.choice(range(0, nr_slices-self.size[0])), 0, 0
+            
+        inpt = np.load(self.path + f"/{filename}/{filename}.npy", mmap_mode="c")[None, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]]
+        inpt = window(inpt, self.ww, self.wl, self.rescale_intercept)
+        fullview = np.load(self.path + f"/{filename}/{filename}_fullview.npy", mmap_mode="c")[None, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]] 
+        fullview = window(fullview, self.ww, self.wl, self.rescale_intercept)
+        
+        x1 = np.load(self.path + f"/{filename}/{filename}_x1.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]] 
+        x2 = np.load(self.path + f"/{filename}/{filename}_x2.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//2:(1+rand2)*self.size[1]//2, rand3*self.size[2]//2:(1+rand3)*self.size[2]//2]   
+        x3 = np.load(self.path + f"/{filename}/{filename}_x3.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//4:(1+rand2)*self.size[1]//4, rand3*self.size[2]//4:(1+rand3)*self.size[2]//4] 
+        x4 = np.load(self.path + f"/{filename}/{filename}_x4.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//8:(1+rand2)*self.size[1]//8, rand3*self.size[2]//8:(1+rand3)*self.size[2]//8] 
+        x5 = np.load(self.path + f"/{filename}/{filename}_x5.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//16:(1+rand2)*self.size[1]//16, rand3*self.size[2]//16:(1+rand3)*self.size[2]//16] 
+        return fullview, inpt, x1, x2, x3, x4, x5
 
   

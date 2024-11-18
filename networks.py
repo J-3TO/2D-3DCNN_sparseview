@@ -126,12 +126,113 @@ class UNet(nn.Module):
         y = self.outc(y)
         out = torch.add(x, y)
         return out
-   
+
+#3D decoder inspired by https://github.com/AghdamAmir/3D-UNet
+class Conv3DBlock(nn.Module):
+    """
+    The basic block for double 3x3x3 convolutions in the analysis path
+    -- __init__()
+    in_channels -> number of input channels
+    out_channels -> desired number of output channels
+    input -> input Tensor to be convolved
+    returns -> Tensor
+    """
+
+    def __init__(self, in_channels, out_channels) -> None:
+        super(Conv3DBlock, self).__init__()
+        self.conv1 = nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(3,3,3), padding=1)
+        self.bn1 = nn.BatchNorm3d(num_features=out_channels)
+        self.conv2 = nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=(3,3,3), padding=1)
+        self.bn2 = nn.BatchNorm3d(num_features=out_channels)
+        self.relu = nn.ReLU()
+
+    
+    def forward(self, input):
+        res = self.relu(self.bn1(self.conv1(input)))
+        res = self.relu(self.bn2(self.conv2(res)))
+        return res
+
+
+class UpConv3DBlock(nn.Module):
+    """
+    The basic block for upsampling followed by double 3x3x3 convolutions in the synthesis path
+    -- __init__()
+    :in_channels -> number of input channels
+    :out_channels -> number of residual connections' channels to be concatenated
+    :param last_layer -> specifies the last output layer
+    :param num_classes -> specifies the number of output channels for dispirate classes
+    -- forward()
+    :param input -> input Tensor
+    :param residual -> residual connection to be concatenated with input
+    :return -> Tensor
+    """
+
+    def __init__(self, in_channels, out_channels=0, last_layer=False, num_classes=1, bilinear=True) -> None:
+        super(UpConv3DBlock, self).__init__()
+
+        if bilinear:
+            self.upconv1 = nn.Sequential(nn.Upsample(scale_factor=(1, 2, 2), mode='trilinear'),
+                nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(3, 3, 3), padding=(1,1,1)))
+        else:
+            self.upconv1 = nn.ConvTranspose3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(3, 2, 2), stride=(1, 2, 2), padding=(1, 0, 0))
+
+        self.relu = nn.ReLU()
+        self.bn = nn.BatchNorm3d(num_features=out_channels)
+        self.conv1 = nn.Conv3d(in_channels=out_channels*2, out_channels=out_channels, kernel_size=(3,3,3), padding=(1,1,1))
+        self.conv2 = nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=(3,3,3), padding=(1,1,1))
+        self.last_layer = last_layer
+        if last_layer:
+            self.conv3 = nn.Conv3d(in_channels=out_channels, out_channels=num_classes, kernel_size=(1,1,1))
+            
+        
+    def forward(self, input, residual=None):
+        out = self.upconv1(input)
+        out = torch.cat((out, residual), 1)
+        out = self.relu(self.bn(self.conv1(out)))
+        out = self.relu(self.bn(self.conv2(out)))
+        if self.last_layer: 
+            out = self.conv3(out)
+        return out
+
+class Decoder3D(nn.Module):
+    """
+    The 3D UNet model
+    -- __init__()
+    :param in_channels -> number of input channels
+    :param num_classes -> specifies the number of output channels or masks for different classes
+    :param level_channels -> the number of channels at each level (count top-down)
+    :param bottleneck_channel -> the number of bottleneck channels 
+    :param device -> the device on which to run the model
+    -- forward()
+    :param input -> input Tensor
+    :return -> Tensor
+    """
+    
+    def __init__(self, in_channels, num_classes, level_channels=[64, 128, 256, 512, 512], bilinear=True) -> None:
+        super(Decoder3D, self).__init__()
+        self.bottleNeck = Conv3DBlock(in_channels=level_channels[4], out_channels=level_channels[4])
+        self.s_block4 = UpConv3DBlock(in_channels=level_channels[4], out_channels=level_channels[3], bilinear=bilinear)
+        self.s_block3 = UpConv3DBlock(in_channels=level_channels[3], out_channels=level_channels[2], bilinear=bilinear)
+        self.s_block2 = UpConv3DBlock(in_channels=level_channels[2], out_channels=level_channels[1], bilinear=bilinear)
+        self.s_block1 = UpConv3DBlock(in_channels=level_channels[1], out_channels=level_channels[0], num_classes=num_classes, last_layer=True, bilinear=bilinear)
+
+    
+    def forward(self, inpt, x1, x2, x3, x4, x5):
+
+        #Synthesis path forward feed
+        out = self.bottleNeck(x5)
+        out = self.s_block4(out, x4)
+        out = self.s_block3(out, x3)
+        out = self.s_block2(out, x2)
+        out = self.s_block1(out, x1)
+        out = torch.add(out, inpt)
+        return out
+
 #-----------------------------------------------------------------------------
 
 #Define Lightning Model
 
-class LitModel(L.LightningModule):
+class LitModel2D(L.LightningModule):
     """
     Lightning Model for training the U-Net. 
     
@@ -169,7 +270,7 @@ class LitModel(L.LightningModule):
                  scheduler_params=None
                 ):
         
-        super(LitModel, self).__init__()
+        super(LitModel2D, self).__init__()
         self.unet = unet
         self.optimizer_algo = optimizer_algo
         self.optimizer_params = optimizer_params
@@ -219,3 +320,91 @@ class LitModel(L.LightningModule):
            'lr_scheduler': scheduler, 
            'monitor': 'val_loss'}
 
+
+class LitModel3D(L.LightningModule):
+    """
+    Lightning Model for training the U-Net. 
+    
+    --------------------------------------------------------
+    
+    Parameters:
+    
+    unet: torch model 
+    U-Net model to be trained
+
+    optimizer_algo: string
+    Type of optimizer to use. Currently implemented 'Adam' and 'AdamW'
+
+    optimizer_params: dict
+    Parameters, which are passed to the optimizer. 
+    Learning rate must be passed seperately to the model, so that the lr_finder from lightnig works
+
+    loss: function
+    Function used for calculating the training/validation loss
+    default: nn.MSELoss(reduction='mean')
+
+    scheduler_algo: str 
+    Choose the scheduler algorithm to be used. Options are: "CosineAnnealingWarmRestarts", "ReduceLROnPlateau", "StepLR"
+
+    scheduler_params: dict 
+    Parameters for scheduler algorithm
+    
+    """
+    def __init__(self, network=None, 
+                 optimizer_algo=None, 
+                 optimizer_params=None,
+                 loss = nn.MSELoss(reduction='mean'), 
+                 lr = None,
+                 scheduler_algo=None,
+                 scheduler_params=None
+                ):
+        
+        super(LitModel3D, self).__init__()
+        self.net = network
+        self.optimizer_algo = optimizer_algo
+        self.optimizer_params = optimizer_params
+        self.lr = lr
+        self.loss = loss
+        self.scheduler_algo = scheduler_algo
+        self.scheduler_params = scheduler_params
+        self.save_hyperparameters(ignore=["network", "loss"])
+
+
+    def forward(self, inpt, x1, x2, x3, x4, x5):
+        pred = self.net(inpt, x1, x2, x3, x4, x5)
+        return pred
+
+    def training_step(self, batch, batch_idx):
+        fullview, inpt, x1, x2, x3, x4, x5 = batch
+        pred = self(inpt, x1, x2, x3, x4, x5)
+
+        loss = self.loss(pred, fullview)
+        self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+
+        return loss.float()
+
+    def validation_step(self, batch, batch_idx):
+        batch_inpt, batch_target, labels = batch
+        batch_pred = self(batch_inpt)
+        loss = self.loss(batch_pred, batch_target)
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+
+        return loss.float()
+
+    def configure_optimizers(self):
+        if self.optimizer_algo == "Adam":
+            optimizer = torch.optim.Adam(self.parameters(), lr=self.lr, **self.optimizer_params)
+        if self.optimizer_algo == "AdamW":
+            optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, **self.optimizer_params)
+
+        if self.scheduler_algo == "CosineAnnealingWarmRestarts":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, **self.scheduler_params)
+        if self.scheduler_algo == "ReduceLROnPlateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **self.scheduler_params)
+        if self.scheduler_algo == "StepLR":
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, **self.scheduler_params)
+        
+        return {
+           'optimizer': optimizer,
+           'lr_scheduler': scheduler, 
+           'monitor': 'train_loss'}
