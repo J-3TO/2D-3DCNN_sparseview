@@ -17,7 +17,10 @@ from torch.utils.data import DataLoader
 import pandas as pd
 import time
 
-#load model from checkpoint
+#load model from checkpoint, 
+#version_3: --> final model for the 2.5D comparison project
+#- 512x512 images, non-residual learning
+
 unet = UNet(n_channels=1, n_classes=1, bilinear=True).float()
 model = LitModel.load_from_checkpoint("/vault3/machine_learning/3CDNN_ArtifactReduction/model_weights/2DUNet/lightning_logs/version_3/checkpoints/epoch=38-step=34164.ckpt", unet=unet)
 model.eval()

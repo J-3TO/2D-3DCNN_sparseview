@@ -232,7 +232,8 @@ class SparseDataset3D(torch.utils.data.Dataset):
                  wl=None,
                  rescale_intercept=0,
                  downsample=True,
-                 size=(100, 256, 256)):
+                 size=(100, 256, 256),
+                 precision="float16"):
 
         self.df = df
         self.filename_list = df["filename"].values
@@ -243,6 +244,7 @@ class SparseDataset3D(torch.utils.data.Dataset):
         self.rescale_intercept=rescale_intercept
         self.downsample = downsample
         self.size = size
+        self.precision = precision
 
     def __len__(self):
         return int(len(self.filename_list))
@@ -261,9 +263,23 @@ class SparseDataset3D(torch.utils.data.Dataset):
         else:
             rand1, rand2, rand3 = random.choice(range(0, nr_slices-self.size[0])), 0, 0
             
-        inpt = np.load(self.path + f"/{filename}/{filename}.npy", mmap_mode="c")[None, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]]
+        inpt = np.load(self.path + f"/{filename}/{filename}.npy", mmap_mode="c")[None, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]].astype(self.precision) 
         inpt = window(inpt, self.ww, self.wl, self.rescale_intercept)
-        fullview = np.load(self.path + f"/{filename}/{filename}_fullview.npy", mmap_mode="c")[None, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]] 
+        fullview = np.load(self.path + f"/{filename}/{filename}_fullview.npy", mmap_mode="c")[None, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]].astype(self.precision) 
+        fullview = window(fullview, self.ww, self.wl, self.rescale_intercept)
+        
+        x1 = np.load(self.path + f"/{filename}/{filename}_x1.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]].astype(self.precision) 
+        x2 = np.load(self.path + f"/{filename}/{filename}_x2.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//2:(1+rand2)*self.size[1]//2, rand3*self.size[2]//2:(1+rand3)*self.size[2]//2].astype(self.precision)    
+        x3 = np.load(self.path + f"/{filename}/{filename}_x3.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//4:(1+rand2)*self.size[1]//4, rand3*self.size[2]//4:(1+rand3)*self.size[2]//4].astype(self.precision) 
+        x4 = np.load(self.path + f"/{filename}/{filename}_x4.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//8:(1+rand2)*self.size[1]//8, rand3*self.size[2]//8:(1+rand3)*self.size[2]//8].astype(self.precision) 
+        x5 = np.load(self.path + f"/{filename}/{filename}_x5.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//16:(1+rand2)*self.size[1]//16, rand3*self.size[2]//16:(1+rand3)*self.size[2]//16].astype(self.precision) 
+        return fullview, inpt, x1, x2, x3, x4, x5
+
+    def load_testdata(self, filename, rand1=0, rand2=0, rand3=0):
+
+        inpt = np.load(self.path + f"/{filename}/{filename}.npy", mmap_mode="c")[None, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]].astype(self.precision) 
+        inpt = window(inpt, self.ww, self.wl, self.rescale_intercept)
+        fullview = np.load(self.path + f"/{filename}/{filename}_fullview.npy", mmap_mode="c")[None, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]].astype(self.precision) 
         fullview = window(fullview, self.ww, self.wl, self.rescale_intercept)
         
         x1 = np.load(self.path + f"/{filename}/{filename}_x1.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]:(1+rand2)*self.size[1], rand3*self.size[2]:(1+rand3)*self.size[2]] 
@@ -272,5 +288,6 @@ class SparseDataset3D(torch.utils.data.Dataset):
         x4 = np.load(self.path + f"/{filename}/{filename}_x4.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//8:(1+rand2)*self.size[1]//8, rand3*self.size[2]//8:(1+rand3)*self.size[2]//8] 
         x5 = np.load(self.path + f"/{filename}/{filename}_x5.npy", mmap_mode="c")[:, rand1:rand1+self.size[0], rand2*self.size[1]//16:(1+rand2)*self.size[1]//16, rand3*self.size[2]//16:(1+rand3)*self.size[2]//16] 
         return fullview, inpt, x1, x2, x3, x4, x5
+
 
   

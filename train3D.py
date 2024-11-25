@@ -1,6 +1,7 @@
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+os.environ["OPENBLAS_NUM_THREADS"] = "100"
 import sys
 import numpy as np
 import torch 
@@ -22,9 +23,12 @@ def main():
     #initialize datasets
     batchsize=1
     path = '/data-pool/data_no_backup/ga63cun/PE/3DCNN//'
-    save_path = "./model_weights/3Decoder/"
+    save_path = "./model_weights/3Decoder/GN/"
     
-    df_train = pd.read_csv("./train.csv") #I just put in the test csv path here
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    
+    df_train = pd.read_csv("./train.csv") 
     df_train_filtered = df_train[df_train["nr_slices"] > 48]
     #initialize training parameters
     lr = 1e-4
@@ -48,7 +52,7 @@ def main():
     dataloader_train = DataLoader(dataset_train, batch_size=batchsize, num_workers=0, shuffle=True)
     
         # ----- init model -----
-    decoder3D = Decoder3D(in_channels=1, num_classes=1, bilinear=False)
+    decoder3D = Decoder3D(in_channels=1, num_classes=1, bilinear=False, norm="GN", norm_params={"num_groups":4}, residual=True)
     
     model = LitModel3D(network=decoder3D, 
                      optimizer_algo=optimizer_algo, 
@@ -67,7 +71,7 @@ def main():
     
     trainer = L.Trainer(logger=[csvlogger, tblogger], 
                         callbacks=[lr_monitor, checkpoint, early_stopping], 
-                        max_epochs=400,precision="bf16-mixed", accumulate_grad_batches=4)
+                        max_epochs=400, precision="bf16-mixed", accumulate_grad_batches=4)
     
     trainer.fit(model, dataloader_train)
 

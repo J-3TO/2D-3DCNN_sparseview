@@ -138,21 +138,50 @@ class Conv3DBlock(nn.Module):
     returns -> Tensor
     """
 
-    def __init__(self, in_channels, out_channels) -> None:
+    def __init__(self, in_channels, out_channels, norm='GN', norm_params={}) -> None:
         super(Conv3DBlock, self).__init__()
         self.conv1 = nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(3,3,3), padding=1)
-        self.bn1 = nn.BatchNorm3d(num_features=out_channels)
         self.conv2 = nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=(3,3,3), padding=1)
-        self.bn2 = nn.BatchNorm3d(num_features=out_channels)
         self.relu = nn.ReLU()
+
+        if norm=="BN":
+            self.bn = nn.BatchNorm3d(num_features=out_channels)
+        elif norm=="GN":
+            self.bn = nn.GroupNorm(num_channels=out_channels, **norm_params)
 
     
     def forward(self, input):
-        res = self.relu(self.bn1(self.conv1(input)))
-        res = self.relu(self.bn2(self.conv2(res)))
+        res = self.relu(self.bn(self.conv1(input)))
+        res = self.relu(self.bn(self.conv2(res)))
         return res
 
+class EncodeFeatures(nn.Module):
+    """
+    The basic block for pooling the z direction of input features x1-x5 by strided 3x1x1 convolutions.
+    -- __init__()
+    in_channels, 
+    out_channels, norm='GN', norm_params={}, nr_pooling=4
+    input -> input Tensor to be convolved
+    returns -> Tensor
+    """
 
+    def __init__(self, in_channels, norm='GN', norm_params={}, nr_pooling=4) -> None:
+        super(EncodeFeatures, self).__init__()
+        self.nr_pooling = nr_pooling
+        self.conv = nn.Conv3d(in_channels=in_channels, out_channels=in_channels, kernel_size=(3,1,1), padding=(1, 0, 0), stride=(2, 1, 1), groups=in_channels)
+        self.relu = nn.ReLU()
+
+        if norm=="BN":
+            self.bn = nn.BatchNorm3d(num_features=in_channels, **norm_params)
+        elif norm=="GN":
+            self.bn = nn.GroupNorm(num_channels=in_channels, **norm_params)
+
+    
+    def forward(self, x):
+        for k in range(self.nr_pooling):
+            x = self.relu(self.bn(self.conv(x)))
+        return x
+        
 class UpConv3DBlock(nn.Module):
     """
     The basic block for upsampling followed by double 3x3x3 convolutions in the synthesis path
@@ -164,20 +193,30 @@ class UpConv3DBlock(nn.Module):
     -- forward()
     :param input -> input Tensor
     :param residual -> residual connection to be concatenated with input
+    :param norm -> to use either BN or GN
+    :upsample_z -> if True, the first dimension gets also upsampled, if not, this dimension stays the same
     :return -> Tensor
     """
 
-    def __init__(self, in_channels, out_channels=0, last_layer=False, num_classes=1, bilinear=True) -> None:
+    def __init__(self, in_channels, out_channels=0, last_layer=False, num_classes=1, bilinear=True, norm="GN", norm_params={}, upsample_z=False) -> None:
         super(UpConv3DBlock, self).__init__()
+        if upsample_z:
+            stride = (2, 2, 2)
+        else:
+            stride = (1, 2, 2)
 
         if bilinear:
             self.upconv1 = nn.Sequential(nn.Upsample(scale_factor=(1, 2, 2), mode='trilinear'),
                 nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(3, 3, 3), padding=(1,1,1)))
         else:
-            self.upconv1 = nn.ConvTranspose3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(3, 2, 2), stride=(1, 2, 2), padding=(1, 0, 0))
+            self.upconv1 = nn.ConvTranspose3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(2, 2, 2), stride=stride, padding=(0, 0, 0))
 
         self.relu = nn.ReLU()
-        self.bn = nn.BatchNorm3d(num_features=out_channels)
+        if norm=="BN":
+            self.bn = nn.BatchNorm3d(num_features=out_channels, **norm_params)
+        elif norm=="GN":
+            self.bn = nn.GroupNorm(num_channels=out_channels, **norm_params)
+            
         self.conv1 = nn.Conv3d(in_channels=out_channels*2, out_channels=out_channels, kernel_size=(3,3,3), padding=(1,1,1))
         self.conv2 = nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=(3,3,3), padding=(1,1,1))
         self.last_layer = last_layer
@@ -186,7 +225,10 @@ class UpConv3DBlock(nn.Module):
             
         
     def forward(self, input, residual=None):
+        #print("inside upconv - size inpt", input.size())
+        #print("inside upconv - size residual", residual.size())
         out = self.upconv1(input)
+        #print("inside upconv - size out upconv", out.size())
         out = torch.cat((out, residual), 1)
         out = self.relu(self.bn(self.conv1(out)))
         out = self.relu(self.bn(self.conv2(out)))
@@ -208,14 +250,14 @@ class Decoder3D(nn.Module):
     :return -> Tensor
     """
     
-    def __init__(self, in_channels, num_classes, level_channels=[64, 128, 256, 512, 512], bilinear=True) -> None:
+    def __init__(self, in_channels, num_classes, level_channels=[64, 128, 256, 512, 512], bilinear=True, norm='GN', norm_params={}, residual=True) -> None:
         super(Decoder3D, self).__init__()
-        self.bottleNeck = Conv3DBlock(in_channels=level_channels[4], out_channels=level_channels[4])
-        self.s_block4 = UpConv3DBlock(in_channels=level_channels[4], out_channels=level_channels[3], bilinear=bilinear)
-        self.s_block3 = UpConv3DBlock(in_channels=level_channels[3], out_channels=level_channels[2], bilinear=bilinear)
-        self.s_block2 = UpConv3DBlock(in_channels=level_channels[2], out_channels=level_channels[1], bilinear=bilinear)
-        self.s_block1 = UpConv3DBlock(in_channels=level_channels[1], out_channels=level_channels[0], num_classes=num_classes, last_layer=True, bilinear=bilinear)
-
+        self.bottleNeck = Conv3DBlock(in_channels=level_channels[4], out_channels=level_channels[4], norm=norm, norm_params=norm_params)
+        self.s_block4 = UpConv3DBlock(in_channels=level_channels[4], out_channels=level_channels[3], bilinear=bilinear, norm=norm, norm_params=norm_params)
+        self.s_block3 = UpConv3DBlock(in_channels=level_channels[3], out_channels=level_channels[2], bilinear=bilinear, norm=norm, norm_params=norm_params)
+        self.s_block2 = UpConv3DBlock(in_channels=level_channels[2], out_channels=level_channels[1], bilinear=bilinear, norm=norm, norm_params=norm_params)
+        self.s_block1 = UpConv3DBlock(in_channels=level_channels[1], out_channels=level_channels[0], num_classes=num_classes, last_layer=True, bilinear=bilinear, norm=norm, norm_params=norm_params)
+        self.residual = residual
     
     def forward(self, inpt, x1, x2, x3, x4, x5):
 
@@ -225,7 +267,71 @@ class Decoder3D(nn.Module):
         out = self.s_block3(out, x3)
         out = self.s_block2(out, x2)
         out = self.s_block1(out, x1)
-        out = torch.add(out, inpt)
+        if self.residual:
+            #print("decod", out.type())
+            out = torch.add(out, inpt)
+            #print("decod",out.type())
+        return out
+
+class Decoder3D_EncodeZ(nn.Module):
+    """
+    The 3D UNet model
+    -- __init__()
+    :param in_channels -> number of input channels
+    :param num_classes -> specifies the number of output channels or masks for different classes
+    :param level_channels -> the number of channels at each level (count top-down)
+    :param bottleneck_channel -> the number of bottleneck channels 
+    :param device -> the device on which to run the model
+    -- forward()
+    :param input -> input Tensor
+    :return -> Tensor
+    """
+    
+    def __init__(self, in_channels, num_classes, level_channels=[64, 128, 256, 512, 512], bilinear=True, norm='GN', norm_params={}, residual=True) -> None:
+        super(Decoder3D_EncodeZ, self).__init__()
+        self.bilinear = bilinear
+        self.norm = norm
+        self.norm_params = norm_params
+        self.level_channels = level_channels
+        self.bottleNeck = Conv3DBlock(in_channels=level_channels[4], out_channels=level_channels[4], norm=norm, norm_params=norm_params)
+        self.s_block4 = UpConv3DBlock(in_channels=level_channels[4], out_channels=level_channels[3], bilinear=bilinear, norm=norm, norm_params=norm_params, upsample_z=True)
+        self.s_block3 = UpConv3DBlock(in_channels=level_channels[3], out_channels=level_channels[2], bilinear=bilinear, norm=norm, norm_params=norm_params, upsample_z=True)
+        self.s_block2 = UpConv3DBlock(in_channels=level_channels[2], out_channels=level_channels[1], bilinear=bilinear, norm=norm, norm_params=norm_params, upsample_z=True)
+        self.s_block1 = UpConv3DBlock(in_channels=level_channels[1], out_channels=level_channels[0], num_classes=num_classes, last_layer=True, bilinear=bilinear, norm=norm, norm_params=norm_params, upsample_z=True)
+        
+        self.encoder_layer5 = EncodeFeatures(in_channels=level_channels[4], norm=norm, norm_params=norm_params, nr_pooling=4)
+        self.encoder_layer4 = EncodeFeatures(in_channels=level_channels[3], norm=norm, norm_params=norm_params, nr_pooling=3)
+        self.encoder_layer3 = EncodeFeatures(in_channels=level_channels[2], norm=norm, norm_params=norm_params, nr_pooling=2)
+        self.encoder_layer2 = EncodeFeatures(in_channels=level_channels[1], norm=norm, norm_params=norm_params, nr_pooling=1)
+        
+        self.residual = residual
+    
+    def forward(self, inpt, x1, x2, x3, x4, x5):
+
+        #Synthesis path forward feed
+        #print("x5:", x5.size())
+        x5 = self.encoder_layer5(x5)
+        #print("x5 encoded:", x5.size())
+        out = self.bottleNeck(x5)
+        #print("out bottleneck:", out.size())
+        
+        #print("x4:", x4.size()) 
+        x4 = self.encoder_layer4(x4)
+        #print("x4 encoded:", x4.size()) 
+        out = self.s_block4(out, x4)
+        #print("out block4:", out.size()) 
+    
+        x3 = self.encoder_layer3(x3)
+        out = self.s_block3(out, x3)
+
+        x2 = self.encoder_layer2(x2)
+        out = self.s_block2(out, x2)
+        
+        out = self.s_block1(out, x1)
+        if self.residual:
+            #print("decod", out.type())
+            out = torch.add(out, inpt)
+            #print("decod",out.type())
         return out
 
 #-----------------------------------------------------------------------------
@@ -288,7 +394,6 @@ class LitModel2D(L.LightningModule):
     def training_step(self, batch, batch_idx):
         batch_inpt, batch_target, labels = batch
         batch_pred = self(batch_inpt)
-
         loss = self.loss(batch_pred, batch_target)
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
 
@@ -319,7 +424,6 @@ class LitModel2D(L.LightningModule):
            'optimizer': optimizer,
            'lr_scheduler': scheduler, 
            'monitor': 'val_loss'}
-
 
 class LitModel3D(L.LightningModule):
     """
@@ -377,7 +481,7 @@ class LitModel3D(L.LightningModule):
     def training_step(self, batch, batch_idx):
         fullview, inpt, x1, x2, x3, x4, x5 = batch
         pred = self(inpt, x1, x2, x3, x4, x5)
-
+        #print(inpt.type(), pred.type())
         loss = self.loss(pred, fullview)
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
 
