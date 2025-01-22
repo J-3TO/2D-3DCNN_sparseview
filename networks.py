@@ -165,10 +165,10 @@ class EncodeFeatures(nn.Module):
     returns -> Tensor
     """
 
-    def __init__(self, in_channels, norm='GN', norm_params={}, nr_pooling=4) -> None:
+    def __init__(self, in_channels, norm='GN', norm_params={}, nr_pooling=4, kernel_size=(3,1,1), padding=(1, 0, 0), stride=(2, 1, 1)) -> None:
         super(EncodeFeatures, self).__init__()
         self.nr_pooling = nr_pooling
-        self.conv = nn.Conv3d(in_channels=in_channels, out_channels=in_channels, kernel_size=(3,1,1), padding=(1, 0, 0), stride=(2, 1, 1), groups=in_channels)
+        self.conv = nn.Conv3d(in_channels=in_channels, out_channels=in_channels, kernel_size=kernel_size, padding=padding, stride=stride, groups=in_channels)
         self.relu = nn.ReLU()
 
         if norm=="BN":
@@ -202,14 +202,20 @@ class UpConv3DBlock(nn.Module):
         super(UpConv3DBlock, self).__init__()
         if upsample_z:
             stride = (2, 2, 2)
+            kernel_size = (2, 2, 2)
+            padding = (0, 0, 0)
+            scale_factor = (2, 2, 2)
         else:
             stride = (1, 2, 2)
+            kernel_size=(3, 2, 2)
+            padding=(1, 0, 0)
+            scale_factor = (1, 2, 2)
 
         if bilinear:
-            self.upconv1 = nn.Sequential(nn.Upsample(scale_factor=(1, 2, 2), mode='trilinear'),
+            self.upconv1 = nn.Sequential(nn.Upsample(scale_factor=scale_factor, mode='trilinear'),
                 nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(3, 3, 3), padding=(1,1,1)))
         else:
-            self.upconv1 = nn.ConvTranspose3d(in_channels=in_channels, out_channels=out_channels, kernel_size=(2, 2, 2), stride=stride, padding=(0, 0, 0))
+            self.upconv1 = nn.ConvTranspose3d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding)
 
         self.relu = nn.ReLU()
         if norm=="BN":
@@ -287,7 +293,7 @@ class Decoder3D_EncodeZ(nn.Module):
     :return -> Tensor
     """
     
-    def __init__(self, in_channels, num_classes, level_channels=[64, 128, 256, 512, 512], bilinear=True, norm='GN', norm_params={}, residual=True) -> None:
+    def __init__(self, in_channels, num_classes, level_channels=[64, 128, 256, 512, 512], bilinear=True, norm='GN', norm_params={}, residual=True, zencoder_params={}) -> None:
         super(Decoder3D_EncodeZ, self).__init__()
         self.bilinear = bilinear
         self.norm = norm
@@ -299,10 +305,10 @@ class Decoder3D_EncodeZ(nn.Module):
         self.s_block2 = UpConv3DBlock(in_channels=level_channels[2], out_channels=level_channels[1], bilinear=bilinear, norm=norm, norm_params=norm_params, upsample_z=True)
         self.s_block1 = UpConv3DBlock(in_channels=level_channels[1], out_channels=level_channels[0], num_classes=num_classes, last_layer=True, bilinear=bilinear, norm=norm, norm_params=norm_params, upsample_z=True)
         
-        self.encoder_layer5 = EncodeFeatures(in_channels=level_channels[4], norm=norm, norm_params=norm_params, nr_pooling=4)
-        self.encoder_layer4 = EncodeFeatures(in_channels=level_channels[3], norm=norm, norm_params=norm_params, nr_pooling=3)
-        self.encoder_layer3 = EncodeFeatures(in_channels=level_channels[2], norm=norm, norm_params=norm_params, nr_pooling=2)
-        self.encoder_layer2 = EncodeFeatures(in_channels=level_channels[1], norm=norm, norm_params=norm_params, nr_pooling=1)
+        self.encoder_layer5 = EncodeFeatures(in_channels=level_channels[4], norm=norm, norm_params=norm_params, nr_pooling=4, **zencoder_params)
+        self.encoder_layer4 = EncodeFeatures(in_channels=level_channels[3], norm=norm, norm_params=norm_params, nr_pooling=3, **zencoder_params)
+        self.encoder_layer3 = EncodeFeatures(in_channels=level_channels[2], norm=norm, norm_params=norm_params, nr_pooling=2, **zencoder_params)
+        self.encoder_layer2 = EncodeFeatures(in_channels=level_channels[1], norm=norm, norm_params=norm_params, nr_pooling=1, **zencoder_params)
         
         self.residual = residual
     

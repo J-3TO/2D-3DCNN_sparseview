@@ -19,7 +19,7 @@ from argparse import ArgumentParser
 
 def main():    
     # ----- init dataset -----
-    dataset_train = SparseDataset(df = df_train, 
+    dataset_train = SparseDataset2D(df = df_train, 
                  path_sparse = path_sparse, 
                  path_gt = path_gt, 
                  augmentation = True, 
@@ -27,7 +27,7 @@ def main():
                  ww=ww, 
                  wl=wl
                              )
-    dataset_val = SparseDataset(df = df_val, 
+    dataset_val = SparseDataset2D(df = df_val, 
                      path_sparse = path_sparse, 
                      path_gt = path_gt, 
                      augmentation = False, 
@@ -41,7 +41,7 @@ def main():
     
     # ----- init model -----
     unet = UNet(n_channels=1, n_classes=1, bilinear=True).float()
-    model = LitModel(unet=unet, 
+    model = LitModel2D(unet=unet, 
                  optimizer_algo=optimizer_algo, 
                  optimizer_params=optimizer_params,
                  loss = nn.MSELoss(reduction='mean'), 
